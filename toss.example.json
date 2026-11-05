@@ -1,0 +1,84 @@
+{
+  "hardware_validated": false,
+  "swept_path_reviewed": false,
+  "rate_hz": 30,
+  "poses": {
+    "ready": {
+      "shoulder_pan": 0,
+      "shoulder_lift": 0,
+      "elbow_flex": 0,
+      "wrist_flex": 0,
+      "wrist_roll": 0,
+      "gripper": 30
+    },
+    "windup": {
+      "shoulder_pan": 0,
+      "shoulder_lift": 10,
+      "elbow_flex": 15,
+      "wrist_flex": 20,
+      "wrist_roll": 0,
+      "gripper": 30
+    },
+    "follow_through": {
+      "shoulder_pan": 0,
+      "shoulder_lift": -10,
+      "elbow_flex": -15,
+      "wrist_flex": -20,
+      "wrist_roll": 0,
+      "gripper": 30
+    }
+  },
+  "limits": {
+    "shoulder_pan": [
+      -60,
+      60
+    ],
+    "shoulder_lift": [
+      -60,
+      60
+    ],
+    "elbow_flex": [
+      -60,
+      60
+    ],
+    "wrist_flex": [
+      -60,
+      60
+    ],
+    "wrist_roll": [
+      -60,
+      60
+    ],
+    "gripper": [
+      0,
+      100
+    ]
+  },
+  "durations_s": {
+    "windup": 3,
+    "swing": 2,
+    "return": 4
+  },
+  "max_velocity_deg_s": {
+    "shoulder_pan": 45,
+    "shoulder_lift": 45,
+    "elbow_flex": 45,
+    "wrist_flex": 45,
+    "wrist_roll": 45
+  },
+  "max_acceleration_deg_s2": {
+    "shoulder_pan": 120,
+    "shoulder_lift": 120,
+    "elbow_flex": 120,
+    "wrist_flex": 120,
+    "wrist_roll": 120
+  },
+  "release": {
+    "swing_fraction": 0.65,
+    "latency_s": 0.15,
+    "opening_rate_pct_s": 100,
+    "open_pct": 80
+  },
+  "tracking_tolerance": 12,
+  "max_lateness_s": 0.1
+}

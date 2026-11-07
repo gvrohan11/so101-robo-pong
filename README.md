@@ -1,33 +1,54 @@
-# SO-101 Robo Pong
+# SO-101 underhand toss (copy of xArm "far")
 
-Self-contained underhand-toss motion baseline. No imports, paths, or runtime dependency on `so101-setup`. No Viam or xArm dependency. Detection, pickup, targeting and RL are future work.
-
-## Offline preview (Python 3.10+; no dependencies)
-
-```bash
-python main.py
-python main.py --release --output release-preview.csv
-python -m unittest -v
 ```
-
-`toss_motion.py` models ready -> wind-up -> forward swing -> ready using minimum-jerk quintic interpolation. Shoulder lift, elbow flex and wrist flex reverse between wind-up and swing; base pan and wrist roll remain fixed. Each joint's displacement and the shared swing duration determine its velocity. Peak speed and acceleration are checked analytically. `--speed` shortens ONLY the swing duration, increasing speed linearly and acceleration quadratically. This is a position trajectory model, not a verified human-motion retargeting or ballistic model.
-
-`toss.example.json` contains illustrative degree angles, not measured SO-101 throwing poses. Its zero pose is NOT a known safe home. The example cannot execute live. Never copy xArm angles or speed tables into this arm.
-
-## Prepare a hardware profile
-
-1. Calibrate using your normal LeRobot tools. Copy the follower calibration JSON into this project's own `calibration/` directory, keeping its robot-ID filename. No calibration files are imported from the setup project at runtime.
-2. Create `toss.local.json` from the example. Measure ready, wind-up and follow-through poses on your own arm and specify conservative joint limits and speed/acceleration caps. All angles use LeRobot degree normalization; gripper is percent, not degrees. Determine positive opening direction before holding a ball.
-3. Review the complete swept arm/gripper/cable path and tabletop clearance, including return. This first version does not contain an SO-101 URDF or automatic collision checker. Set `hardware_validated` and `swept_path_reviewed` only after checking these on your hardware.
-4. Install LeRobot with Feetech support as an independent dependency in this project's environment (not an editable install pointing at so101-setup). The adapter targets `lerobot.robots.so_follower.SO101Follower`, matching the inspected setup's API. Version differences need checking.
-5. Place the arm at the measured ready pose. Initial errors and excessive tracking errors abort execution. Use an empty gripper for the first slow test and have someone at the power disconnect.
-
-```bash
-python main.py --config toss.local.json --port YOUR_FOLLOWER_PORT --robot-id my_awesome_follower_arm --calibration-dir calibration --go
+python main.py               # dry run: print + limit/rate-check the plan, write trajectory.csv
+python main.py --go --slow   # LIVE, swing at 25% speed — do this first
+python main.py --go          # LIVE, full speed
 ```
+`main.py` holds the constants and hardware I/O; `toss_motion.py` holds planning,
+checks and streaming. Sequence: current pose → START (≤20°/s) → wind-up (2 s) →
+swing + hard brake → 0.6 s settle → START (2.5 s). Asks for Enter before moving
+(`--yes` skips). Port auto-detects if one `/dev/tty.usbmodem*` exists, else `--port`.
 
-Add `--release` only after empty-arm motion is verified. Measure physical opening latency; the default 0.15 seconds is a placeholder, not a measurement. The release command is advanced by `latency_s` relative to `swing_fraction`; opening moves gradually at `opening_rate_pct_s`. Actual departure depends on finger geometry and contact, so validate with video. The scheduler includes USB/read/write latency, aborts missed deadlines, and logs measured positions and command times to JSONL.
+## Start / end pose
+Upside-down "J": pan centred, upper arm ~vertical tilted back, forearm forward and
+slightly up, wrist bent sharply down, open gripper hanging. Values were read off the
+arm with the `my_awesome_follower_arm` calibration (LeRobot degrees, 0 = calibration
+midpoint). wrist_flex START = 92.6°, only 4.5° under its 97.1° limit.
 
-Hardware connect configures LeRobot's motor mode/gains. On failure or Ctrl+C no automatic return is attempted: with no collision model, that could compound a problem. Disconnect retains servo torque; support the arm before removing power. Ball recovery is manual for this initial motion-only project. No motor speed/acceleration registers are raised by this code.
+## Joint mapping
+| xArm FAR | SO-101 | FAR Δ | SO-101 Δ (×0.8) |
+|---|---|---|---|
+| J1 shoulder | shoulder_lift | −49.9° | −39.9° |
+| J2 elbow | elbow_flex | −40.0° | −32.0° |
+| J4 wrist pitch | wrist_flex | +35.4° | +28.3° |
 
-The program assumes the ball is already held. It does not claim to predict landing distance or guarantee a toss. Build a new SO-101 dataset after measuring trajectory tracking, release delay, and landing outcomes.
+Pan and roll are held fixed. On the SO-101: shoulder_lift + = forward, elbow_flex − = forearm up,
+wrist_flex + = gripper up/forward (manual encoder checks). The hand-measured clear
+wind-up (shoulder +23°, elbow +45° from START) sets the swing direction to shoulder −, elbow −,
+wrist +, which matches FAR's signs.
+
+## Scaling
+- **Amplitude:** FAR's joint ratios × 0.8. 75% of the shoulder/elbow swing is
+  wind-up behind START, 25% is overshoot. The wrist is 95% wind-up because it has no headroom above START.
+- **Shape:** same as FAR. All three joints share one time base. The lead joint (shoulder) ramps at
+  1000°/s², cruises at 150°/s, then brakes at 3000°/s². Swing ≈ 0.37 s. These are
+  STS3215 choices. FAR used ~165°/s and 1145°/s² on the xArm. The ball leaves at the brake.
+- **--slow** stretches the swing 4× (same shape, 25% speed).
+- No servo speed, accel or PID registers are written, so there is nothing to restore. On exit or error the
+  arm is held at its present position with torque on. Support it before cutting power.
+
+## Not yet verified
+- The wind-up's wrist (−27°, gripper swung back and down) was not hand-checked for clearance. Run `--go --slow` first.
+- How hard the brake really is depends on the servo's PID and onboard acceleration setting. Check the
+  execution log `trajectory.execution.jsonl`.
+
+## Gripper / release
+Closed (`GRIPPER_CLOSED`) at START and through the wind-up, so it will hold the ball.
+Opens to `GRIPPER_OPEN` during the release and closes again on the return. The open command
+uses the same rule as Ball-Toss-In-Cup `throw.release_delay()`: it is sent at
+`max(brake_start - RELEASE_LEAD_S, RELEASE_MIN_DELAY_S)` after the swing starts, so the fingers are open as the arm
+brakes. On the xArm, `lead` was 0.43 s (~0.30 s gripper latency + 0.13 s margin). The SO-101 values
+(latency 0.04 s, margin 0.06 s, min delay 0.05 s) are estimates to tune on the arm.
+
+The swing amounts and speed will later be set from the cup's distance from the base.

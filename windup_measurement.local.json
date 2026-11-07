@@ -1,0 +1,26 @@
+{
+  "start": {
+    "shoulder_pan": -0.43956043956043955,
+    "shoulder_lift": -14.065934065934066,
+    "elbow_flex": -8.659340659340659,
+    "wrist_flex": 92.57142857142857,
+    "wrist_roll": -6.813186813186813,
+    "gripper": 0.6578947368421052
+  },
+  "windup": {
+    "shoulder_pan": 0.176,
+    "shoulder_lift": 9.055,
+    "elbow_flex": 35.912,
+    "wrist_flex": 94.769,
+    "wrist_roll": -6.637,
+    "gripper": 0.592
+  },
+  "units": "arm degrees; gripper percent",
+  "measurement_note": "Rounded live calibrated encoder readings from this session, Nov 5 2026",
+  "operator_observations": {
+    "gripper_behind_and_below_start": true,
+    "manual_path_clear": true
+  },
+  "automatic_path_reviewed": false,
+  "note": "Manual endpoint and clearance observation do not certify the interpolated robot trajectory. This is not an executable profile."
+}

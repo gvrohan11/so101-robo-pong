@@ -1,6 +1,6 @@
 {
-  "hardware_validated": false,
-  "swept_path_reviewed": false,
+  "hardware_validated": true,
+  "swept_path_reviewed": true,
   "rate_hz": 30,
   "poses": {
     "ready": {
@@ -80,5 +80,33 @@
     "open_pct": 80
   },
   "tracking_tolerance": 12,
-  "max_lateness_s": 0.1
+  "max_lateness_s": 0.1,
+  "approach": {
+    "path_reviewed": true,
+    "min_duration_s": 4,
+    "max_velocity_deg_s": 10,
+    "max_acceleration_deg_s2": 30,
+    "reviewed_region_deg": {
+      "shoulder_pan": [
+        -30,
+        30
+      ],
+      "shoulder_lift": [
+        -30,
+        30
+      ],
+      "elbow_flex": [
+        -30,
+        30
+      ],
+      "wrist_flex": [
+        -30,
+        30
+      ],
+      "wrist_roll": [
+        -30,
+        30
+      ]
+    }
+  }
 }

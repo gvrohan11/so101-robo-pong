@@ -1,0 +1,22 @@
+{
+  "follow_through": {
+    "shoulder_pan": 0.17582417582417584,
+    "shoulder_lift": 7.648351648351649,
+    "elbow_flex": -5.758241758241758,
+    "wrist_flex": 19.076923076923077,
+    "wrist_roll": -6.549450549450549,
+    "gripper": 30.263157894736842
+  },
+  "torque": {
+    "shoulder_pan": 1,
+    "shoulder_lift": 0,
+    "elbow_flex": 0,
+    "wrist_flex": 0,
+    "wrist_roll": 0,
+    "gripper": 0
+  },
+  "units": "arm degrees; gripper percent",
+  "manual_path_clear": null,
+  "automatic_path_reviewed": false,
+  "note": "Read-only live measurement Nov 5 2026. Not an executable profile."
+}

@@ -16,39 +16,37 @@ slightly up, wrist bent sharply down, open gripper hanging. Values were read off
 arm with the `my_awesome_follower_arm` calibration (LeRobot degrees, 0 = calibration
 midpoint). wrist_flex START = 92.6°, only 4.5° under its 97.1° limit.
 
-## Joint mapping
-| xArm FAR | SO-101 | FAR Δ | SO-101 Δ (×0.8) |
-|---|---|---|---|
-| J1 shoulder | shoulder_lift | −49.9° | −39.9° |
-| J2 elbow | elbow_flex | −40.0° | −32.0° |
-| J4 wrist pitch | wrist_flex | +35.4° | +28.3° |
+## Per-throw variables (`toss_params.py`)
+These 14 values are the only things that change from throw to throw. Before each
+throw, `params_for_target(distance_m)` returns them; for now it returns the
+hand-tuned defaults, and later a table, fit or trained RL/ML policy will. `TossParams`
+has `to_vector()` / `from_vector()` (fixed order) for ML, plus JSON I/O
+(`python main.py --params p.json`). Every set is checked against joint limits and
+speed caps before the arm moves.
 
-Pan and roll are held fixed. On the SO-101: shoulder_lift + = forward, elbow_flex − = forearm up,
-wrist_flex + = gripper up/forward (manual encoder checks). The hand-measured clear
-wind-up (shoulder +23°, elbow +45° from START) sets the swing direction to shoulder −, elbow −,
-wrist +, which matches FAR's signs.
+| Variable | Default | Unit |
+|---|---|---|
+| windup_move_shoulder / elbow / wrist | +20.0 / +44.0 / −6.9 | deg |
+| windup_speed_shoulder / elbow / wrist | 18.1 / 39.8 / 6.2 | deg/s (peak) |
+| release_move_shoulder / elbow / wrist | −30.0 / −52.0 / −15.0 | deg |
+| release_speed_shoulder / elbow / wrist | 130 / 225 / 65 | deg/s (peak) |
+| gripper_move | 52.1 (= 1% → 40%) | deg of gripper-servo rotation |
+| gripper_release_speed | 600 | deg/s (commanded) |
 
-## Scaling
-- **Amplitude:** FAR's joint ratios × 0.8. 75% of the shoulder/elbow swing is
-  wind-up behind START, 25% is overshoot. The wrist is 95% wind-up because it has no headroom above START.
-- **Shape:** same as FAR. All three joints share one time base. The lead joint (shoulder) ramps at
-  1000°/s², cruises at 150°/s, then brakes at 3000°/s². Swing ≈ 0.37 s. These are
-  STS3215 choices. FAR used ~165°/s and 1145°/s² on the xArm. The ball leaves at the brake.
-- **--slow** stretches the swing 4× (same shape, 25% speed).
-- No servo speed, accel or PID registers are written, so there is nothing to restore. On exit or error the
-  arm is held at its present position with torque on. Support it before cutting power.
+Signs: shoulder_lift + = upper arm forward, elbow_flex + = forearm folds in,
+wrist_flex + = gripper tucks back, gripper + = opens. Each joint ramps up and
+brakes on its own profile, and all joints start together. To keep the joints
+finishing together, keep each speed proportional to its move.
 
-## Not yet verified
-- The wind-up's wrist (−27°, gripper swung back and down) was not hand-checked for clearance. Run `--go --slow` first.
-- How hard the brake really is depends on the servo's PID and onboard acceleration setting. Check the
-  execution log `trajectory.execution.jsonl`.
+## Fixed setup (`main.py`)
+START_POSE, ramp shapes (`WINDUP_RAMP_S`, `RELEASE_RAMP_S`), the release-timing rule
+from Ball-Toss-In-Cup (`RELEASE_LEAD_S`, `RELEASE_MIN_DELAY_S`; open command at
+max(brake start − lead, min delay)), gripper torque boost, safety caps, control rate.
+`--slow` stretches only the release 4×. On exit the gripper torque limit is restored
+and the arm holds its position with torque on.
 
-## Gripper / release
-Closed (`GRIPPER_CLOSED`) at START and through the wind-up, so it will hold the ball.
-Opens to `GRIPPER_OPEN` during the release and closes again on the return. The open command
-uses the same rule as Ball-Toss-In-Cup `throw.release_delay()`: it is sent at
-`max(brake_start - RELEASE_LEAD_S, RELEASE_MIN_DELAY_S)` after the swing starts, so the fingers are open as the arm
-brakes. On the xArm, `lead` was 0.43 s (~0.30 s gripper latency + 0.13 s margin). The SO-101 values
-(latency 0.04 s, margin 0.06 s, min delay 0.05 s) are estimates to tune on the arm.
-
-The swing amounts and speed will later be set from the cup's distance from the base.
+## Origin of the defaults
+Started from the xArm FAR swing (J1 −49.9°, J2 −40°, J4 +35.4° → shoulder_lift,
+elbow_flex, wrist_flex) scaled ×0.8. They were then hand-tuned on the arm on Nov 7:
+more elbow fold, less shoulder in the wind-up, the wrist reversed in the release,
+and a faster release and wind-up.

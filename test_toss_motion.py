@@ -1,36 +1,45 @@
 import json, unittest
 from pathlib import Path
 import main
-from toss_motion import JOINTS, SWING_JOINTS
+from toss_params import TossParams, NAMES
 
 class TossTests(unittest.TestCase):
     def setUp(self):
-        cal = json.loads((Path(main.HERE)/"calibration/my_awesome_follower_arm.json").read_text())
-        self.lim = main.limits_from_calibration(cal, main.LIMIT_MARGIN_DEG)
-    def test_plan_passes_and_returns_to_start(self):
+        self.cal = json.loads((Path(main.HERE)/"calibration/my_awesome_follower_arm.json").read_text())
+        self.lim = main.limits_from_calibration(self.cal, main.LIMIT_MARGIN_DEG)
+    def plan(self, p=None, slow=False):
+        return main.build_plan(main.START_POSE, main.START_POSE, self.lim, slow, p or TossParams(), self.cal)
+    def test_moves_match_params(self):
+        p = TossParams()
+        s, w, f, _, _ = self.plan(p)
+        for j, d in p.windup_move().items():
+            self.assertAlmostEqual(w[j] - main.START_POSE[j], d, places=6)
+        for j, d in p.release_move().items():
+            self.assertAlmostEqual(f[j] - w[j], d, places=6)
+    def test_returns_to_start_and_fixed_joints(self):
         for slow in (False, True):
-            s, w, f, _ = main.build_plan(main.START_POSE, main.START_POSE, self.lim, slow)
-            for j in JOINTS:
+            s, *_ = self.plan(slow=slow)
+            for j in main.JOINTS:
                 self.assertAlmostEqual(s[-1].q[j], main.START_POSE[j], places=6)
             self.assertTrue(all(b.t > a.t for a, b in zip(s, s[1:])))
-    def test_windup_reverses_and_fixed_joints(self):
-        s, w, f, _ = main.build_plan(main.START_POSE, main.START_POSE, self.lim, False)
-        for j in SWING_JOINTS:
-            self.assertLess((w[j]-main.START_POSE[j])*(f[j]-main.START_POSE[j]), 0)
-        for j in ("shoulder_pan", "wrist_roll"):
-            self.assertTrue(all(x.q[j] == main.START_POSE[j] for x in s))
-    def test_gripper_closed_then_opens_in_release(self):
-        for slow in (False, True):
-            s, *_ = main.build_plan(main.START_POSE, main.START_POSE, self.lim, slow)
-            pre = [x for x in s if x.phase in ("approach", "windup")]
-            self.assertTrue(all(x.q["gripper"] == main.GRIPPER_CLOSED for x in pre[1:]))
-            sw = [x.q["gripper"] for x in s if x.phase == "swing"]
-            self.assertEqual(sw[0], main.GRIPPER_CLOSED)
-            self.assertEqual(sw[-1], main.GRIPPER_OPEN_CMD)
-            self.assertEqual(s[-1].q["gripper"], main.GRIPPER_CLOSED)
-    def test_far_ratios_kept(self):
-        _, w, f, _ = main.build_plan(main.START_POSE, main.START_POSE, self.lim, False)
-        self.assertAlmostEqual(w["shoulder_lift"]-main.START_POSE["shoulder_lift"], main.SHOULDER_WINDUP_DEG)  # wrist has extra tuck
+            for j in ("shoulder_pan", "wrist_roll"):
+                self.assertTrue(all(x.q[j] == main.START_POSE[j] for x in s))
+    def test_gripper(self):
+        p = TossParams()
+        s, w, f, _, info = self.plan(p)
+        pre = [x for x in s if x.phase in ("approach", "windup")]
+        self.assertTrue(all(x.q["gripper"] == main.GRIPPER_CLOSED for x in pre[1:]))
+        self.assertAlmostEqual(f["gripper"] - main.GRIPPER_CLOSED,
+                               p.gripper_move * main.gripper_pct_per_deg(self.cal), places=6)
+        self.assertEqual(s[-1].q["gripper"], main.GRIPPER_CLOSED)
+    def test_vector_roundtrip_and_limits(self):
+        p = TossParams()
+        self.assertEqual(TossParams.from_vector(p.to_vector()), p)
+        self.assertEqual(len(NAMES), 14)
+        with self.assertRaises(ValueError):
+            self.plan(TossParams(release_move_wrist=+30))   # past wrist limit
+        with self.assertRaises(ValueError):
+            self.plan(TossParams(release_speed_elbow=400))  # over speed cap
 
 if __name__ == "__main__":
     unittest.main()

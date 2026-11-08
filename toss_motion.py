@@ -67,55 +67,10 @@ def min_jerk(u: float) -> float:
     return 10 * u**3 - 15 * u**4 + 6 * u**5
 
 
-def trapezoid(u: float, fa: float, fd: float) -> float:
-    """Normalized 0->1 trapezoid: accelerate over the first `fa` of the time,
-    cruise, decelerate over the last `fd`. A short `fd` means a quick stop
-    instead of min-jerk's long, slow creep into the pose."""
-    v = 1.0 / (1.0 - fa / 2 - fd / 2)          # cruise speed (normalized)
-    if u <= fa:
-        return 0.5 * v / fa * u * u
-    if u <= 1 - fd:
-        return 0.5 * v * fa + v * (u - fa)
-    r = 1.0 - u
-    return 1.0 - 0.5 * v / fd * r * r
-
-
 def slow_move(a: dict, b: dict, max_vel: float, min_time: float) -> float:
     """Duration so a min-jerk move a->b stays under max_vel (peak = 1.875 * d / T)."""
     d = max(abs(b[j] - a[j]) for j in ARM_JOINTS)
     return max(min_time, 1.875 * d / max_vel)
-
-
-def brake_profile(peak_vel: float, accel: float, brake: float, dist: float):
-    """Trapezoid for the lead joint: ramp at `accel`, cruise at `peak_vel`, stop at `brake`.
-
-    Returns (duration, s(t)) with s normalized 0->1. This mirrors the xArm FAR swing:
-    servo-mode move at constant speed with ACCEL ramps, ending in an abrupt stop.
-    """
-    t_a, t_d = peak_vel / accel, peak_vel / brake
-    d_a, d_d = 0.5 * accel * t_a**2, 0.5 * brake * t_d**2
-    if d_a + d_d > dist:                       # triangular: never reaches cruise
-        peak_vel = math.sqrt(2 * dist / (1 / accel + 1 / brake))
-        t_a, t_d = peak_vel / accel, peak_vel / brake
-        d_a, d_d = 0.5 * accel * t_a**2, 0.5 * brake * t_d**2
-    t_c = (dist - d_a - d_d) / peak_vel
-    total = t_a + t_c + t_d
-    t_brake = t_a + t_c                        # when braking starts (s from swing start)
-
-    def s(t: float) -> float:
-        if t <= 0:
-            return 0.0
-        if t < t_a:
-            x = 0.5 * accel * t**2
-        elif t < t_a + t_c:
-            x = d_a + peak_vel * (t - t_a)
-        elif t < total:
-            r = total - t
-            x = dist - 0.5 * brake * r**2
-        else:
-            x = dist
-        return x / dist
-    return total, s, t_brake
 
 
 def release_time(t_brake: float, lead: float, min_delay: float) -> float:
@@ -126,59 +81,99 @@ def release_time(t_brake: float, lead: float, min_delay: float) -> float:
 
 
 # ---------------------------------------------------------------- plan
-def plan_toss(current: dict, start: dict, windup: dict, follow: dict, *, rate_hz: float,
-              peak_vel: float, accel: float, brake: float, slow_vel: float,
-              windup_time: float, settle_time: float, return_time: float,
-              time_scale: float = 1.0, gripper_closed: float | None = None,
-              gripper_open: float | None = None, release_lead: float = 0.0,
-              release_min_delay: float = 0.0, gripper_open_cmd: float | None = None,
-              windup_accel_frac: float = 0.4,
-              windup_decel_frac: float = 0.15) -> list[Sample]:
-    """current -> START (slow) -> wind-up (slow) -> SWING + hard brake -> settle -> START (slow).
+def ramp(dist: float, vmax: float, t_acc: float, t_dec: float):
+    """One joint's move of signed `dist` at peak speed `vmax` (deg/s), speeding up
+    over `t_acc` s and stopping over `t_dec` s. Returns (duration, brake_start, pos(t))."""
+    d = abs(dist)
+    if d == 0:
+        return 0.0, 0.0, lambda t: 0.0
+    v = min(vmax, 2 * d / (t_acc + t_dec))     # too short to reach vmax: triangle
+    ta, td = v / vmax * t_acc, v / vmax * t_dec
+    T = d / v + (ta + td) / 2
+    sign = 1.0 if dist > 0 else -1.0
 
-    time_scale > 1 stretches only the swing (e.g. 4 = 25% speed, same shape).
-    Pan and roll are held at START. Gripper: closed (start/windup values) until the
-    open command time in the swing, then stepped to `follow['gripper']` (open);
-    the return closes it again. Release timing is computed in un-scaled swing time
-    then stretched with the swing, so --slow keeps the same release point.
+    def pos(t: float) -> float:
+        if t <= 0:
+            x = 0.0
+        elif t < ta:
+            x = 0.5 * v / ta * t * t
+        elif t < T - td:
+            x = 0.5 * v * ta + v * (t - ta)
+        elif t < T:
+            r = T - t
+            x = d - 0.5 * v / td * r * r
+        else:
+            x = d
+        return sign * x
+    return T, T - td, pos
+
+
+def release_time(t_brake: float, lead: float, min_delay: float) -> float:
+    """Open-command time (s from release start), same rule as Ball-Toss-In-Cup
+    throw.release_delay(): `lead` s before braking starts, never before `min_delay`."""
+    return max(t_brake - lead, min_delay)
+
+
+def plan_toss(current: dict, start: dict, p, *, gripper_closed: float, gripper_pct_per_deg: float,
+              rate_hz: float, slow_vel: float, windup_ramp_s: tuple, release_ramp_s: tuple,
+              release_lead: float, release_min_delay: float, settle_time: float,
+              return_time: float, release_time_scale: float = 1.0):
+    """current -> START (slow) -> WIND-UP -> RELEASE + hard brake -> settle -> START (slow).
+
+    `p` is a TossParams. Pan and roll are held at START. Gripper is closed until the
+    open time in the release, then opens at p.gripper_release_speed by p.gripper_move,
+    and closes on the return. `release_time_scale` > 1 stretches the release (--slow).
+    Returns (samples, windup_pose, follow_pose, info).
     """
     dt = 1.0 / rate_hz
-    out: list[Sample] = []
+    start = dict(start, gripper=gripper_closed)
+    out = [Sample(0.0, "approach", dict(current))]
     t0 = 0.0
 
-    def add_min_jerk(a, b, T, phase, profile=min_jerk):
+    def add_min_jerk(a, b, T, phase):
         nonlocal t0
         n = max(1, math.ceil(T * rate_hz))
         for i in range(1, n + 1):
-            u = profile(i / n)
+            u = min_jerk(i / n)
             out.append(Sample(t0 + T * i / n, phase, {j: a[j] + (b[j] - a[j]) * u for j in JOINTS}))
         t0 += T
 
-    out.append(Sample(0.0, "approach", dict(current)))
-    add_min_jerk(current, start, slow_move(current, start, slow_vel, 2.0), "approach")
-    # Wind-up: gentle start, short stop, so it flows straight into the swing
-    # (min-jerk spent its last ~0.3 s creeping <1 deg, which looked like a pause).
-    add_min_jerk(start, windup, windup_time, "windup",
-                 lambda u: trapezoid(u, windup_accel_frac, windup_decel_frac))
+    def add_ramps(a, moves, speeds, ramps, phase, scale=1.0, gripper=None):
+        """Every joint runs its own ramp from pose `a`, all starting together."""
+        nonlocal t0
+        prof = {j: ramp(moves[j], speeds[j], *ramps) for j in moves}
+        T = max(pr[0] for pr in prof.values())
+        if gripper:
+            T = max(T, gripper["t_open"] + gripper["dur"])
+        n = max(1, math.ceil(T * scale * rate_hz))
+        for i in range(1, n + 1):
+            t = T * i / n
+            q = dict(a)
+            for j, (_, _, pos) in prof.items():
+                q[j] = a[j] + pos(t)
+            if gripper and t >= gripper["t_open"]:
+                q["gripper"] = a["gripper"] + gripper["move"] * min(1.0, (t - gripper["t_open"]) / max(gripper["dur"], 1e-9))
+            out.append(Sample(t0 + T * scale * i / n, phase, q))
+        t0 += T * scale
+        return prof, T, dict(out[-1].q)
 
-    lead = max(SWING_JOINTS, key=lambda j: abs(follow[j] - windup[j]))
-    T, s, t_brake = brake_profile(peak_vel, accel, brake, abs(follow[lead] - windup[lead]))
+    add_min_jerk(current, start, slow_move(current, start, slow_vel, 2.0), "approach")
+    _, T_w, windup = add_ramps(start, p.windup_move(), p.windup_speed(), windup_ramp_s, "windup")
+
+    # release timing from the joint that brakes last
+    prof = {j: ramp(p.release_move()[j], p.release_speed()[j], *release_ramp_s) for j in SWING_JOINTS}
+    t_brake = max(pr[1] for pr in prof.values())
     t_open = release_time(t_brake, release_lead, release_min_delay)
-    T_real = T * time_scale
-    n = max(2, math.ceil(T_real * rate_hz))
-    for i in range(1, n + 1):
-        u = s(T * i / n)
-        q = {j: windup[j] + (follow[j] - windup[j]) * u for j in JOINTS}
-        # Overdrive: the servo's speed grows with position error, so command a
-        # wider target than the final opening during the swing, then settle back.
-        opened = follow["gripper"] if gripper_open_cmd is None else gripper_open_cmd
-        q["gripper"] = opened if T * i / n >= t_open else windup["gripper"]
-        out.append(Sample(t0 + T_real * i / n, "swing", q))
-    t0 += T_real
+    g_move = p.gripper_move * gripper_pct_per_deg
+    g = {"t_open": t_open, "move": g_move, "dur": p.gripper_move / p.gripper_release_speed}
+    _, T_r, follow = add_ramps(windup, p.release_move(), p.release_speed(), release_ramp_s,
+                               "swing", release_time_scale, g)
     out.append(Sample(t0 + settle_time, "settle", dict(follow)))   # hold: ball flies off
     t0 += settle_time
-    add_min_jerk(follow, start, return_time, "return")
-    return out
+    add_min_jerk(follow, start, max(return_time, slow_move(follow, start, slow_vel, 0.0)), "return")
+    info = {"windup_s": T_w, "release_s": T_r * release_time_scale, "brake_at_s": t_brake * release_time_scale,
+            "open_at_s": t_open * release_time_scale, "open_pct": g_move}
+    return out, windup, follow, info
 
 
 # ---------------------------------------------------------------- execution
